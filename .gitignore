@@ -10,8 +10,7 @@ __pycache__/
 venv/
 env/
 
-# 敏感設定（含 vCenter 帳密）
-vc_config.json
+# 敏感設定
 config.json
 
 # 環境變數
