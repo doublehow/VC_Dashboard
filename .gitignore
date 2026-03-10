@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# 虛擬環境
+.venv/
+venv/
+env/
+
+# 敏感設定（含 vCenter 帳密）
+vc_config.json
+config.json
+
+# 環境變數
+.env
+.env.*
+
+# NiceGUI 執行時期資料（session / 快取）
+.nicegui/
+
+# Claude Code 本地設定
+.claude/
+
+# IDE
+.vscode/
+.idea/
+
+# 系統
+.DS_Store
+Thumbs.db

@@ -1,0 +1,70 @@
+# vCenter Dashboard v1.2
+
+以 **NiceGUI** + **pyVmomi** 建立的 vCenter 監控儀表板，透過瀏覽器即可檢視多台 vCenter 的運算、儲存、網路與 VM 總覽資訊，無需安裝任何用戶端軟體。
+
+## 功能
+
+### 四大頁籤
+
+| 頁籤 | 說明 |
+|------|------|
+| 運算 (Compute) | 以 ESXi 主機為單位，呈現 CPU / 記憶體使用率，並列出各主機所屬 VM |
+| 儲存 (Storage) | 依 Datastore 分組，顯示 VM 已用 / 佈建容量及所屬 VMDK |
+| 網路 (Network) | 依 Network Group (Port Group) 分組，顯示每台 VM 在該網路的 IP |
+| VM 總覽 | 所有 VM 的一覽表，含電源狀態、IP、Network Group、主機、儲存區、來源 vCenter |
+
+### VM 詳細資訊
+
+- 每張 NIC 的介面類型（VMXNET 3 / E1000e 等）、MAC 位址、所屬網路、IP 清單
+- DirectPath I/O（SR-IOV）狀態
+- 滑鼠懸停 VM 名稱可查看 NIC 詳細 tooltip
+
+### 搜尋
+
+- 四個頁籤均提供即時搜尋，支援模糊比對
+- 搜尋結果以黃底 highlight 標示匹配關鍵字
+- 搜尋輸入採 debounce 設計，避免每次按鍵觸發大量 DOM 更新
+
+### VM 總覽表格
+
+- 多筆 IP / Network Group / 儲存區逐行分開顯示
+- 支援每頁 20 / 100 / 全部筆數切換
+- 欄位可排序
+- 一鍵匯出 CSV（UTF-8 BOM，Excel 可直接開啟）
+
+### 其他
+
+- 支援同時連接多台 vCenter，資料自動合併顯示
+- 背景定時更新，原地更新 DOM 不干擾使用者操作
+- AD（NTLM）驗證登入
+- Session 過期自動重連
+
+## 安裝
+
+需要 Python 3.10+。
+
+```bash
+pip install -r requirements.txt
+```
+
+## 執行
+
+```bash
+python main_light.py
+```
+
+啟動後瀏覽器開啟 `http://localhost:8082`。
+
+預設登入帳號：`admin`，密碼：`admin`。
+
+## 設定
+
+vCenter 連線資訊儲存於 `config.json`（由介面操作自動寫入，勿將帳密寫入原始碼或提交至版控）。
+
+## 版本記錄
+
+| 版本 | 主要變更 |
+|------|----------|
+| v1.2 | 全欄搜尋 highlight、VM 總覽多值欄位換行、DirectPath I/O 修正、搜尋 debounce 效能優化 |
+| v1.1 | 多 vCenter 支援、背景原地更新、每張 NIC IP 顯示、CSV 匯出 |
+| v1.0 | 初始版本，運算 / 儲存 / 網路 / VM 總覽四頁籤 |
