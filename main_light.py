@@ -404,7 +404,27 @@ def _render_storage(panel_containers):
         # ── 原地更新 ──
         vms_by_name = {v['name']: v for v in state.vms}
         for ds_name, vm_refs_map in refs['datastores'].items():
+            # DS-level 容量更新
+            ds_refs = vm_refs_map.get('__ds__', {})
+            if 'usage_label' in ds_refs:
+                di   = state.datastores.get(ds_name, {})
+                cap  = di.get('capacity_gb', 0)
+                free = di.get('free_space_gb', 0)
+                used = round(cap - free, 1) if cap else 0
+                pct  = (used / cap) if cap else 0
+                ds_refs['usage_label'].text = f"儲存: {int(pct*100)}%  ({used} / {cap} GB)"
+                ds_refs['usage_bar'].value  = pct
+                ds_refs['usage_bar']._props['color'] = _usage_color(pct)
+                ds_refs['usage_bar'].update()
+                if pct >= 0.8:
+                    ds_refs['card'].classes(add='vc-alert-blink', remove='')
+                else:
+                    ds_refs['card'].classes(remove='vc-alert-blink')
+                ds_refs['card'].update()
+            # VM-level 更新
             for vm_name, vm_refs in vm_refs_map.items():
+                if vm_name == '__ds__':
+                    continue
                 vm = vms_by_name.get(vm_name)
                 if not vm:
                     continue
@@ -426,20 +446,32 @@ def _render_storage(panel_containers):
         ):
             for ds_name, vms in datastores.items():
                 sorted_vms  = sorted(vms, key=lambda v: v.get('disk_committed_gb', 0), reverse=True)
-                ds_vm_refs  = {}
+                ds_vm_refs: dict = {}
                 ds_info  = state.datastores.get(ds_name, {})
                 cap_gb   = ds_info.get('capacity_gb', 0)
                 free_gb  = ds_info.get('free_space_gb', 0)
                 used_gb  = round(cap_gb - free_gb, 1) if cap_gb else 0
-                with ui.card().classes(
+                pct_gb   = (used_gb / cap_gb) if cap_gb else 0
+                is_alert = pct_gb >= 0.8
+                card_el  = ui.card().classes(
                     'w-full p-0 overflow-hidden flex flex-col '
                     'bg-slate-100 border border-slate-200 shadow-md'
-                ):
+                    + (' vc-alert-blink' if is_alert else '')
+                )
+                ds_vm_refs['__ds__'] = {'card': card_el}
+                with card_el:
                     with ui.row().classes('w-full items-center text-white p-3 m-0 flex-nowrap').style('background-color: #e8714a'):
                         ui.icon('storage', size='md').classes('flex-shrink-0')
                         ui.html(_hl(ds_name, search)).classes('text-lg font-bold ml-2 truncate flex-grow')
+                    with ui.column().classes('px-4 pt-3 pb-1 w-full'):
                         if cap_gb:
-                            ui.label(f'{used_gb} / {cap_gb} GB').classes('text-sm flex-shrink-0 ml-3 opacity-90 font-mono')
+                            with ui.row().classes('w-full items-baseline justify-between flex-nowrap'):
+                                usage_lbl = ui.label(
+                                    f"儲存: {int(pct_gb*100)}%  ({used_gb} / {cap_gb} GB)"
+                                ).classes('text-sm font-bold text-slate-600')
+                                ui.label(f"剩餘 {free_gb} GB").classes('text-xs text-slate-400 flex-shrink-0 ml-2')
+                            usage_bar = ui.linear_progress(value=pct_gb, color=_usage_color(pct_gb)).classes('mt-1 h-2 w-full mb-1')
+                            ds_vm_refs['__ds__'].update({'usage_label': usage_lbl, 'usage_bar': usage_bar})
                     with ui.column().classes('p-3 w-full'):
                         ui.label(f"掛載了 {len(vms)} 台 VM").classes('text-sm mb-2 font-bold').style('color: #e8714a')
                         with ui.element('div').classes(
