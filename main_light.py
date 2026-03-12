@@ -123,6 +123,7 @@ class State:
     def __init__(self):
         self.vms = []
         self.hosts = []
+        self.datastores = {}  # {ds_name: {capacity_gb, free_space_gb}}
         self.managers = {} # 修改為字典，支援多個 Manager
         cfg = load_config()
         self.vc_configs = cfg['vcenter']
@@ -149,7 +150,8 @@ _connecting: set = set()
 async def fetch_all_data():
     all_hosts = []
     all_vms = []
-    
+    all_datastores = {}
+
     for vc_ip, manager in state.managers.items():
         if manager.si:
             try:
@@ -159,14 +161,16 @@ async def fetch_all_data():
                 # 為資料標註來源 VC
                 for h in info['hosts']: h['vc'] = vc_ip
                 for v in info['vms']: v['vc'] = vc_ip
-                
+
                 all_hosts.extend(info['hosts'])
                 all_vms.extend(info['vms'])
+                all_datastores.update(info.get('datastores', {}))
             except Exception as e:
                 print(f"[{vc_ip}] 背景更新失敗: {e}")
-                
+
     state.hosts = all_hosts
     state.vms = all_vms
+    state.datastores = all_datastores
 
 # --- App-level 背景輪詢（無瀏覽器也持續執行，保持 session 存活）---
 async def background_poller():
@@ -244,6 +248,12 @@ def _render_compute(panel_containers):
             hr['mem_bar'].value = mem_pct
             hr['mem_bar']._props['color'] = _usage_color(mem_pct)
             hr['mem_bar'].update()
+            is_alert = cpu_pct >= 0.8 or mem_pct >= 0.8
+            if is_alert:
+                hr['card'].classes(add='vc-alert-blink', remove='')
+            else:
+                hr['card'].classes(remove='vc-alert-blink')
+            hr['card'].update()
             for vm_name in vms_by_host[hn]:
                 vm = vms_by_name.get(vm_name)
                 vr = hr['vms'].get(vm_name)
@@ -257,6 +267,15 @@ def _render_compute(panel_containers):
         return
 
     # ── 全量重建 ──
+    if not panel_containers.get('_alert_css_added'):
+        ui.add_css('''
+            @keyframes vc-alert {
+                0%, 100% { border-color: #ef4444; box-shadow: 0 0 0 2px rgba(239,68,68,0.7); }
+                50%       { border-color: #ef4444; box-shadow: 0 0 0 7px rgba(239,68,68,0.05); }
+            }
+            .vc-alert-blink { animation: vc-alert 1.2s ease-in-out infinite; }
+        ''')
+        panel_containers['_alert_css_added'] = True
     panel_containers.pop('compute_refs', None)
     panel_containers['compute'].clear()
     refs = {'host_order': host_order, 'vms_by_host': vms_by_host, 'hosts': {}, 'search': search}
@@ -278,25 +297,43 @@ def _render_compute(panel_containers):
                         filtered_vms_by_host.get(host_name, []),
                         key=lambda v: v.get('cpu_usage', 0), reverse=True
                     )
-                    hr = {'vms': {}}
-                    with ui.card().classes(
+                    hr: dict = {'vms': {}}
+                    is_alert = cpu_pct >= 0.8 or mem_pct >= 0.8
+                    card_el = ui.card().classes(
                         'w-full p-0 overflow-hidden flex flex-col h-full '
                         'bg-slate-100 shadow-lg border border-slate-200'
-                    ):
+                        + (' vc-alert-blink' if is_alert else '')
+                    )
+                    hr['card'] = card_el
+                    with card_el:
                         with ui.row().classes('w-full items-center bg-[#4B4B4B] text-white p-3 m-0 flex-nowrap'):
                             ui.icon('dns', size='md').classes('flex-shrink-0')
                             with ui.column().classes('ml-2 gap-0 flex-grow min-w-0'):
                                 ui.html(_hl(host_name, search)).classes('text-lg font-bold leading-tight truncate w-full')
                                 ui.label(host.get('vc', 'Unknown VC')).classes('text-xs opacity-70 leading-tight truncate w-full')
+                        num_threads = host.get('num_cpu_threads', 0)
+                        model       = host.get('model', '')
+                        cpu_model   = host.get('cpu_model', '')
+                        uptime_days = host.get('uptime_seconds', 0) // 86400
                         with ui.column().classes('px-4 pt-4 pb-2 w-full'):
-                            hr['cpu_label'] = ui.label(
-                                f"CPU: {int(cpu_pct*100)}%  ({host.get('cpu_usage_mhz', 0) / 1000:.2f} / {total_cpu / 1000:.2f} GHz)"
-                            ).classes('text-sm font-bold text-slate-600')
+                            with ui.row().classes('w-full items-baseline justify-between flex-nowrap'):
+                                hr['cpu_label'] = ui.label(
+                                    f"CPU: {int(cpu_pct*100)}%  ({host.get('cpu_usage_mhz', 0) / 1000:.2f} / {total_cpu / 1000:.2f} GHz)"
+                                ).classes('text-sm font-bold text-slate-600')
+                                if num_threads:
+                                    ui.label(f"{num_threads} 邏輯核心").classes('text-xs text-slate-400 flex-shrink-0 ml-2')
                             hr['cpu_bar'] = ui.linear_progress(value=cpu_pct, color=_usage_color(cpu_pct)).classes('mt-1 h-2 w-full')
                             hr['mem_label'] = ui.label(
                                 f"Memory: {int(mem_pct*100)}%  ({host.get('memory_usage_mb', 0) / 1024:.2f} / {total_mem / 1024:.2f} GB)"
                             ).classes('text-sm font-bold text-slate-600 mt-3')
                             hr['mem_bar'] = ui.linear_progress(value=mem_pct, color=_usage_color(mem_pct)).classes('mt-1 h-2 w-full')
+                            with ui.column().classes('mt-2 gap-0 w-full'):
+                                if model:
+                                    ui.label(f"型號: {model}").classes('text-xs text-slate-400 truncate w-full')
+                                if cpu_model:
+                                    ui.label(f"處理器類型: {cpu_model}").classes('text-xs text-slate-400 truncate w-full')
+                                if uptime_days:
+                                    ui.label(f"運作時間: {uptime_days} 天").classes('text-xs text-slate-400')
                         ui.separator().classes('mx-4 my-2 bg-slate-300')
                         with ui.column().classes('w-full bg-slate-200 p-3 flex-grow'):
                             with ui.row().classes('w-full justify-between items-center mb-2 flex-nowrap'):
@@ -390,6 +427,10 @@ def _render_storage(panel_containers):
             for ds_name, vms in datastores.items():
                 sorted_vms  = sorted(vms, key=lambda v: v.get('disk_committed_gb', 0), reverse=True)
                 ds_vm_refs  = {}
+                ds_info  = state.datastores.get(ds_name, {})
+                cap_gb   = ds_info.get('capacity_gb', 0)
+                free_gb  = ds_info.get('free_space_gb', 0)
+                used_gb  = round(cap_gb - free_gb, 1) if cap_gb else 0
                 with ui.card().classes(
                     'w-full p-0 overflow-hidden flex flex-col '
                     'bg-slate-100 border border-slate-200 shadow-md'
@@ -397,6 +438,8 @@ def _render_storage(panel_containers):
                     with ui.row().classes('w-full items-center text-white p-3 m-0 flex-nowrap').style('background-color: #e8714a'):
                         ui.icon('storage', size='md').classes('flex-shrink-0')
                         ui.html(_hl(ds_name, search)).classes('text-lg font-bold ml-2 truncate flex-grow')
+                        if cap_gb:
+                            ui.label(f'{used_gb} / {cap_gb} GB').classes('text-sm flex-shrink-0 ml-3 opacity-90 font-mono')
                     with ui.column().classes('p-3 w-full'):
                         ui.label(f"掛載了 {len(vms)} 台 VM").classes('text-sm mb-2 font-bold').style('color: #e8714a')
                         with ui.element('div').classes(
@@ -475,7 +518,7 @@ def _render_network(panel_containers):
 
     grp_order  = [g[0] for g in sorted_groups]
     vms_by_grp = {
-        grp: [v['name'] for v in sorted(vms, key=_ip_sort)]
+        grp: [v['name'] for v in sorted(vms, key=lambda v: (0 if v.get('power_state') == 'poweredOn' else 1,) + tuple(_ip_sort(v)))]
         for grp, vms in sorted_groups
     }
 
@@ -540,7 +583,7 @@ def _render_network(panel_containers):
                             ui.badge(f'{len(grp_vms)} 台', color='grey-8')
                         ui.separator().classes('my-2 bg-slate-300')
                         with ui.element('div').classes('w-full overflow-y-auto max-h-[248px] flex flex-col gap-2 pr-1'):
-                            for vm in sorted(grp_vms, key=_ip_sort):
+                            for vm in sorted(grp_vms, key=lambda v: (0 if v.get('power_state') == 'poweredOn' else 1,) + tuple(_ip_sort(v))):
                                 is_on      = vm.get('power_state') == 'poweredOn'
                                 icon_color = '#8C1C13' if is_on else '#94a3b8'
                                 vm_bg      = 'bg-white' if is_on else 'bg-slate-50'
@@ -573,13 +616,15 @@ def _export_vmlist_csv(panel_containers):
     all_rows = panel_containers.get('vmlist_all_rows', [])
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(['VM 名稱', '來源 vCenter', 'IP 位址', '電源狀態', '所在主機 (ESXi)', '儲存區', 'Network Group'])
+    writer.writerow(['VM 名稱', '來源 vCenter', 'IP 位址', '電源狀態', 'CPU (vCPU)', 'RAM (GB)', '所在主機 (ESXi)', '儲存區', 'Network Group'])
     for row in all_rows:
         writer.writerow([
             row.get('name', ''),
             row.get('vc', ''),
             row.get('ip', ''),
             '開機' if row.get('power_state') == 'poweredOn' else '關機',
+            row.get('num_cpu', ''),
+            row.get('ram_gb', ''),
             row.get('host', ''),
             row.get('datastore', ''),
             row.get('network', ''),
@@ -606,6 +651,8 @@ def _render_vmlist(panel_containers):
         dss = [d for d in row.get('datastores', [row.get('datastore', '')]) if d]
         row['datastore']  = '\n'.join(dss) if dss else '—'
         row['ds_list']    = dss if dss else ['—']
+        # CPU / RAM 設定量
+        row['ram_gb'] = round(row.get('memory_size_mb', 0) / 1024, 1)
         return row
 
     all_vm_rows = [normalize_vm_row(v) for v in state.vms]
@@ -656,8 +703,10 @@ def _render_vmlist(panel_containers):
                         panel_containers['vmlist_search_input'] = search_input
                         ui.button(icon='download', on_click=lambda: _export_vmlist_csv(panel_containers)).props('flat round color=primary').tooltip('匯出 CSV')
                 columns = [
-                    {'name': 'name',      'label': 'VM 名稱',         'field': 'name',        'required': True, 'align': 'left',   'sortable': True, 'style': 'min-width:90px'},
+                    {'name': 'name',      'label': 'VM 名稱',         'field': 'name',        'required': True, 'align': 'left',   'sortable': True, 'style': 'width:200px; max-width:200px'},
                     {'name': 'state',     'label': '電源狀態',        'field': 'power_state', 'sortable': True, 'align': 'center', 'style': 'width:80px; min-width:80px'},
+                    {'name': 'cpu',       'label': 'CPU (vCPU)',      'field': 'num_cpu',     'sortable': True, 'align': 'center', 'style': 'width:90px; min-width:90px'},
+                    {'name': 'ram',       'label': 'RAM (GB)',        'field': 'ram_gb',      'sortable': True, 'align': 'center', 'style': 'width:90px; min-width:90px'},
                     {'name': 'ip',        'label': 'IP 地址',         'field': 'ip',          'sortable': True, 'align': 'left',   'style': 'min-width:140px'},
                     {'name': 'network',   'label': 'Network Group',   'field': 'network',     'sortable': True, 'align': 'left',   'style': 'min-width:160px'},
                     {'name': 'host',      'label': '所在主機 (ESXi)', 'field': 'host',        'sortable': True, 'align': 'left',   'style': 'min-width:160px'},
@@ -669,8 +718,11 @@ def _render_vmlist(panel_containers):
                     pagination={'rowsPerPage': 20}
                 ).classes('w-full text-slate-700').props('flat :rows-per-page-options="[20, 100, 0]"')
                 tbl.add_slot('body-cell-name', '''
-                    <q-td :props="props">
-                        <span v-html="props.row.name_hl || props.row.name"></span>
+                    <q-td :props="props" style="max-width:200px; overflow:hidden">
+                        <div style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap"
+                             :title="props.row.name">
+                            <span v-html="props.row.name_hl || props.row.name"></span>
+                        </div>
                     </q-td>
                 ''')
                 tbl.add_slot('body-cell-state', '''
@@ -680,6 +732,16 @@ def _render_vmlist(panel_containers):
                             :label="props.row.power_state === 'poweredOn' ? 'ON' : 'OFF'"
                             class="text-white text-xs font-bold px-2 py-1"
                         />
+                    </q-td>
+                ''')
+                tbl.add_slot('body-cell-cpu', '''
+                    <q-td :props="props" class="text-center text-xs font-mono">
+                        {{ props.row.num_cpu || '—' }}
+                    </q-td>
+                ''')
+                tbl.add_slot('body-cell-ram', '''
+                    <q-td :props="props" class="text-center text-xs font-mono">
+                        {{ props.row.ram_gb != null ? props.row.ram_gb : '—' }}
                     </q-td>
                 ''')
                 # 多值欄位：每行獨立顯示，支援 highlight

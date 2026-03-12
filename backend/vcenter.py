@@ -37,7 +37,7 @@ class VCenterManager:
 
     def _fetch_data(self):
         """從 vCenter API 抓取 Host 與 VM 資料"""
-        data = {"hosts": [], "vms": []}
+        data = {"hosts": [], "vms": [], "datastores": {}}
         container_view = self.content.viewManager.CreateContainerView(
             self.content.rootFolder, [vim.HostSystem], True
         )
@@ -52,7 +52,11 @@ class VCenterManager:
                     "cpu_usage_mhz": summary.quickStats.overallCpuUsage,
                     "memory_usage_mb": summary.quickStats.overallMemoryUsage,
                     "cpu_total_mhz": summary.hardware.cpuMhz * summary.hardware.numCpuCores,
-                    "memory_total_mb": summary.hardware.memorySize / (1024 * 1024)
+                    "memory_total_mb": summary.hardware.memorySize / (1024 * 1024),
+                    "model": summary.hardware.model or '',
+                    "cpu_model": summary.hardware.cpuModel or '',
+                    "num_cpu_threads": summary.hardware.numCpuThreads or 0,
+                    "uptime_seconds": summary.quickStats.uptime or 0,
                 })
 
                 for vm in host.vm:
@@ -160,6 +164,21 @@ class VCenterManager:
             except Exception as e:
                 print(f"Error reading Host {host.name}: {e}")
                 continue
+
+        # ── Datastore 容量 ──
+        ds_view = self.content.viewManager.CreateContainerView(
+            self.content.rootFolder, [vim.Datastore], True
+        )
+        for ds in list(ds_view.view):
+            try:
+                s = ds.summary
+                data["datastores"][s.name] = {
+                    "capacity_gb": round(s.capacity / (1024 ** 3), 1),
+                    "free_space_gb": round(s.freeSpace / (1024 ** 3), 1),
+                }
+            except Exception:
+                continue
+        ds_view.Destroy()
 
         return data
 
