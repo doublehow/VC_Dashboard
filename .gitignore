@@ -22,6 +22,7 @@ config.json
 
 # Claude Code 本地設定
 .claude/
+CLAUDE.md
 
 # IDE
 .vscode/
