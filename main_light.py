@@ -941,6 +941,7 @@ def main_page():
                 _update_timer.active = False
 
         _update_timer = ui.timer(10.0, update_data)
+        ui.context.client.on_disconnect(lambda: setattr(_update_timer, 'active', False))
 
         async def connect_all():
             if not state.vc_configs:
